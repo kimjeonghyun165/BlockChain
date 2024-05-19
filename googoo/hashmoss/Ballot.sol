@@ -1,101 +1,100 @@
-struct Voter {
-        uint weight;
-        bool voted; 
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity >=0.8.0;
+import "@openzeppelin/contracts/interfaces/IERC721.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+
+contract Ballot {
+    string public name; // 의제 제목
+    string public description; // 의제 내용
+    address public tokenContract; // 토큰홀더
+    uint256 public sentAmount;
+    uint256 _timestamp;
+    uint32 public constant VOTING_DURATION = 3 days;
+
+    struct Voter {
+        uint weight; // 투표지분
+        bool voted; // 투표여부
+        uint vote; // 투표된 제안의 인덱스 데이터 값
     }
 
-    struct Imitation {
-        string  name;
-        string  description;
-        address holderContract;
-        address payable recipient;
-        uint256 sentAmount;
-        uint256 agree;
-        uint256 disagree;
-        uint64 executionTimestamp;
-        uint64 expireTime;
-        bool status;
+    struct Proposal {
+        bytes32 proposalName;
+        uint voteCount;
     }
 
-    event ExecutedImitation(
-        string  indexed name,
-        string  description,
-        address holderContract,
-        address payable recipient,
-        uint256 sentAmount,
-        uint64 executionTimestamp,
-        uint64 expireTime
-    );
+    mapping(address => Voter) public voters;
+    Proposal[] public proposals;
 
-    mapping(uint64 => mapping(address => Voter)) public _voteMaps;
-
-    Imitation[] public ImitationDetail; 
-    
-
-    function _createVote(
-        string[] memory _nda, 
-        address _holderContract, 
-        address payable _recipient, 
-        uint256 _sentAmount,
-        uint64 _expireTime
-        ) external onlyOwner {
-
-        if(_expireTime < 10)// revert("reset the time.");
-        require(_sentAmount < address(this).balance, "many");
-
-        ImitationDetail.push(Imitation({
-            name: _nda[0],
-            description: _nda[1],
-            holderContract: _holderContract,
-            recipient: _recipient,
-            sentAmount: _sentAmount,
-            agree: 0,
-            disagree: 0,
-            executionTimestamp: uint64(block.timestamp),
-            expireTime: uint64(_expireTime + block.timestamp),
-            status: false
-        }));
-
-        emit ExecutedImitation (
-            _nda[0],
-            _nda[1],
-            _holderContract,
-            _recipient,
-            _sentAmount,
-            uint64(block.timestamp),
-            _expireTime
+    constructor(
+        string[] memory _nda,
+        bytes32[] memory _proposalName,
+        address _tokenContract
+    ) public {
+        require(
+            _proposalName.length > 0,
+            "There should be atleast 1 proposla."
         );
+        name = _nda[0];
+        description = _nda[1];
+        tokenContract = _tokenContract;
+        for (uint i = 0; i < _proposalName.length; i++) {
+            proposals.push(
+                Proposal({proposalName: _proposalName[i], voteCount: 0})
+            );
+        }
     }
 
-    function _Agreevote(uint64 key) external {
-        if(ImitationDetail[key].expireTime < block.timestamp) revert("ended.");
-        Voter storage sender = _voteMaps[key][msg.sender];
-        sender.weight = IERC721A(ImitationDetail[key].holderContract).balanceOf(msg.sender);
-        require(!sender.voted, "Already Voted");
-        require(sender.weight > 0, "GT");
+    // function createBallot(bytes32[] memory _proposalName) public {
+    //     for (uint i = 0; i < _proposalName.length; i++) {
+    //         proposals.push(Proposal({
+    //             name: _proposalName[i],
+    //             voteCount: 0
+    //         }));
+    //     }
+    // }
+
+    function vote(uint proposal) public {
+        require(
+            _timestamp + VOTING_DURATION >= block.timestamp,
+            "DAO: voting is over"
+        );
+        Voter storage sender = voters[msg.sender];
+        sender.weight = IERC721(tokenContract).balanceOf(msg.sender);
+        require(sender.weight != 0, "Has no right to vote");
+        require(!sender.voted, "Voter has already Voted!");
+        require(
+            IERC721(tokenContract).balanceOf(msg.sender) > 0,
+            "you dont have Governace token in your wallet"
+        );
         sender.voted = true;
-        ImitationDetail[key].agree += sender.weight;
+        sender.vote = proposal;
+        proposals[proposal].voteCount += sender.weight;
     }
 
-    function _Disagreevote(uint64 key) external {
-        if(ImitationDetail[key].expireTime < block.timestamp) revert("ended.");
-        Voter storage sender = _voteMaps[key][msg.sender];
-        sender.weight = IERC721A(ImitationDetail[key].holderContract).balanceOf(msg.sender);
-        require(!sender.voted, "Already Voted");
-        require(sender.weight > 0, "GT");
-        sender.voted = true;
-        ImitationDetail[key].disagree += sender.weight;
-    }
-    
-    function _withdrawAmount(uint64 key) external nonReentrant onlyOwner {
-        if(ImitationDetail[key].expireTime > block.timestamp) revert("Voting is under way.");
-        require(ImitationDetail[key].agree > ImitationDetail[key].disagree, "rejected");
-        require(!ImitationDetail[key].status, "already withdraw");
-        uint256 Amount = ImitationDetail[key].sentAmount;
-        address payable Target = ImitationDetail[key].recipient;
-        Target.transfer(Amount);
-        ImitationDetail[key].status = true;
+    function winningProposal() public view returns (uint winningProposal_) {
+        uint winningVoteCount = 0;
+        for (uint p = 0; p < proposals.length; p++) {
+            if (proposals[p].voteCount > winningVoteCount) {
+                winningVoteCount = proposals[p].voteCount;
+                winningProposal_ = p;
+            }
+        }
     }
 
-    function callNow() public view returns(uint256) {
-        return block.timestamp;
+    function winnerName() public view returns (bytes32 winnerName_) {
+        winnerName_ = proposals[winningProposal()].proposalName;
     }
+
+    // function sendValue(address payable _recipient, uint256 amount) {
+
+    // }
+
+    //event howMuch(uint256 _value);
+
+    // function callNow(address payable _recipient) public payable {
+    //     _recipient = recipient;
+    //     (bool sent, ) = _recipient.call{value: msg.value , gas:1000}("");
+    //     require(sent, "Failed to send Ether");
+    //     //emit howMuch(_sendAmount);
+    // }
+}
